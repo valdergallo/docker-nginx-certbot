@@ -1,7 +1,7 @@
 FROM nginx
 MAINTAINER Elliot Saba <staticfloat@gmail.com>
 
-VOLUME /etc/letsencrypt
+VOLUME ["/etc/letsencrypt"]
 EXPOSE 80
 EXPOSE 443
 
