@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Helper function to output error messages to STDERR, with red text
 error() {
@@ -16,7 +16,7 @@ error() {
 parse_domains() {
     # For each configuration file in /etc/nginx/conf.d/*.conf*
     for conf_file in /etc/nginx/conf.d/*.conf*; do
-        sed -n -e 's&^\s*ssl_certificate_key\s*\/etc/letsencrypt/live/\(.*\)/privkey.pem;&\1&p' $conf_file | xargs echo | tr ' ' ','
+        sed -n -r -e 's&^\s*ssl_certificate_key\s*\/etc/letsencrypt/live/(.*)/privkey.pem;\s*(#.*)?$&\1&p' $conf_file | xargs echo
     done
 }
 
@@ -29,8 +29,9 @@ parse_keyfiles() {
 # keyfiles), return 1 otherwise
 keyfiles_exist() {
     for keyfile in $(parse_keyfiles $1); do
-        if [ ! -f $keyfile ]; then
-            echo "Couldn't find keyfile $keyfile for $1"
+	    currentfile=${keyfile//$'\r'/}
+        if [ ! -f $currentfile ]; then
+            echo "Couldn't find keyfile $currentfile for $1"
             return 1
         fi
     done
@@ -59,8 +60,8 @@ auto_enable_configs() {
 # EMAIL environment variable, to register the proper support email address.
 get_certificate() {
     echo "Getting certificate for domain $1 on behalf of user $2"
-    PRODUCTION_URL='https://acme-v01.api.letsencrypt.org/directory'
-    STAGING_URL='https://acme-staging.api.letsencrypt.org/directory'
+    PRODUCTION_URL='https://acme-v02.api.letsencrypt.org/directory'
+    STAGING_URL='https://acme-staging-v02.api.letsencrypt.org/directory'
 
     if [ "${IS_STAGING}" = "1" ]; then
         letsencrypt_url=$STAGING_URL
@@ -74,4 +75,44 @@ get_certificate() {
     certbot certonly --agree-tos --keep -n --text --email $2 --server \
         $letsencrypt_url -d $1 --http-01-port 1337 \
         --standalone --preferred-challenges http-01 --debug
+}
+
+# Given a domain name, return true if a renewal is required (last renewal
+# ran over a week ago or never happened yet), otherwise return false.
+is_renewal_required() {
+    # If the file does not exist assume a renewal is required
+    last_renewal_file="/etc/letsencrypt/live/$1/privkey.pem"
+    [ ! -e "$last_renewal_file" ] && return;
+    
+    # If the file exists, check if the last renewal was more than a week ago
+    one_week_sec=604800
+    now_sec=$(date -d now +%s)
+    last_renewal_sec=$(stat -c %Y "$last_renewal_file")
+    last_renewal_delta_sec=$(( ($now_sec - $last_renewal_sec) ))
+    is_finshed_week_sec=$(( ($one_week_sec - $last_renewal_delta_sec) ))
+    [ $is_finshed_week_sec -lt 0 ]
+}
+
+# copies any *.conf files in /etc/nginx/user.conf.d
+# to /etc/nginx/conf.d so they are included as configs
+# this allows a user to easily mount their own configs
+# We make use of `envsubst` to allow for on-the-fly templating
+# of the user configs.
+template_user_configs() {
+    SOURCE_DIR="${1-/etc/nginx/user.conf.d}"
+    TARGET_DIR="${2-/etc/nginx/conf.d}"
+
+    # envsubst needs dollar signs in front of all variable names
+    DENV=$(echo ${ENVSUBST_VARS} | sed -E 's/\$*([^ ]+)/\$\1/g')
+
+    echo "templating scripts from ${SOURCE_DIR} to ${TARGET_DIR}"
+    echo "Substituting variables ${DENV}"
+
+    if [ ! -d "$SOURCE_DIR" ]; then
+        echo "no ${SOURCE_DIR}, nothing to do."
+    else
+        for conf in ${SOURCE_DIR}/*.conf; do
+            envsubst "${DENV}" <"${conf}" > "${TARGET_DIR}/$(basename ${conf})"
+        done
+    fi
 }
