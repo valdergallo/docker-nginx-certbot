@@ -54,8 +54,9 @@ while [ true ]; do
         # re-run certbot
         echo "Run certbot"
         /scripts/run_certbot.sh
+        kill -HUP $NGINX_PID
     fi
 
-    # Wait on sleep so that when we get ctrl-c'ed it kills everything due to our trap
-    wait "$SLEEP_PID"
+    # Wait for 1 week sleep or nginx
+    wait -n "$SLEEP_PID" "$NGINX_PID"
 done
